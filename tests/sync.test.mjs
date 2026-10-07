@@ -5,6 +5,13 @@ import { mergeItems, sameItems, validItems, parseDocument, normalizeConfig, conn
 const item = (id = 'a', extra = {}) => ({ id, name: '保温杯', category: '零食与饮水', quantity: '1 个', note: '500ml', plan: '携带', packed: false, ...extra });
 const cfg = { owner: 'mtbillcai', repo: 'IceLand', branch: 'data', path: 'checklist.json' };
 const doc = items => ({ id: 'iceland-test', updatedAt: 1, items });
+test('浏览器 fetch 不会以 GitHubStore 作为 this 调用', async () => {
+  const store = new GitHubStore(cfg, '', async function () {
+    assert.equal(this, undefined);
+    return { ok: true, json: async () => ({ verified: true }) };
+  });
+  assert.deepEqual(await store.request('https://api.github.com/test'), { verified: true });
+});
 test('未填写令牌不能假装完成连接，切换仓库不会复用旧凭证', () => {
   assert.throws(() => connectionToken(''), /Generate token/);
   assert.throws(() => connectionToken('   '), /仅登录 GitHub/);

@@ -97,7 +97,9 @@ export class GitHubStore {
     if (options.body) headers['Content-Type'] = 'application/json';
     let response;
     try {
-      response = await this.fetcher(url, { ...options, headers, cache: 'no-store',
+      // Browser fetch rejects an arbitrary receiver; call it as a standalone function.
+      const fetcher = this.fetcher;
+      response = await fetcher(url, { ...options, headers, cache: 'no-store',
         credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(20000) });
     } catch { throw Error('暂时无法连接 GitHub。修改仍保存在本机，请检查网络后重试。'); }
     if (!response.ok) {
