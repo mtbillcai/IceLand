@@ -38,6 +38,12 @@ export function normalizeConfig(input) {
 }
 export const configKey = c => `${c.owner.toLowerCase()}/${c.repo.toLowerCase()}/${c.branch}/${c.path}`;
 
+export function connectionToken(input, existing = '', switching = false) {
+  const token = String(input || '').trim() || (switching ? '' : existing);
+  if (!token) throw Error('还没有填写访问令牌。请先在 GitHub 点击 Generate token，再把生成的令牌粘贴到这里。仅登录 GitHub 账号还不能解锁清单。');
+  return token;
+}
+
 // Three-way merge, including deletions. Concurrent edits to different fields can merge.
 // Conflicting items remain local until the user explicitly resolves them.
 export function mergeItems(base, local, remote, choices = {}) {

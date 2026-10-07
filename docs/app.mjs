@@ -1,5 +1,5 @@
 import { createView } from './view.mjs';
-import { GitHubStore, clone, validItems, parseDocument, normalizeConfig, configKey, sameItems, mergeItems } from './sync.mjs';
+import { GitHubStore, clone, validItems, parseDocument, normalizeConfig, configKey, connectionToken, sameItems, mergeItems } from './sync.mjs';
 
 const $ = selector => document.querySelector(selector);
 const ROOT = 'iceland-github-v1:';
@@ -129,7 +129,7 @@ async function sync({ initialize = false } = {}) {
       state.base = clone(document.items); state.updatedAt = document.updatedAt;
       cache(); render();
       status('已与 GitHub 同步', '已创建云端清单。其他电脑现在可以读取。');
-      return;
+      return true;
     }
     lastCheck = Date.now();
     authorized = true;
@@ -149,15 +149,17 @@ async function sync({ initialize = false } = {}) {
     state = { ...document, base: clone(document.items), sha };
     cache(); render();
     status('已与 GitHub 同步',
-      `已读取最新清单 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`
+      `已读取 ${state.items.length} 项物品，${state.items.filter(item => item.packed && item.plan !== '不带').length} 项已准备 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`
       + ' · 私人清单，可以在其他电脑上授权后继续整理。'
       + (storageOK ? '' : ' 当前浏览器未允许缓存。'));
+    return true;
   } catch (error) {
     if (error.status === 401 || error.status === 403 || error.status === 404) { authorized = false; render(); }
     status('同步未完成', error.message, true);
     if (error.status === 404 && token && state.items.length) {
       $('#initialize-cloud').hidden = false;
     }
+    return false;
   } finally { working = false; controls(); }
 }
 $('#conflict-form').onsubmit = e => {
@@ -184,7 +186,7 @@ function openSettings() {
   const c = config || { owner: 'mtbillcai', repo: 'IceLand-data', branch: 'main', path: 'checklist.json' };
   for (const key of ['owner', 'repo', 'branch', 'path']) $(`#github-${key}`).value = c[key];
   $('#github-token').value = '';
-  $('#github-token').placeholder = token ? '已连接；留空可继续使用当前令牌' : '私有清单或保存修改时需要';
+  $('#github-token').placeholder = token ? '已填过令牌；留空可继续使用' : '粘贴生成的令牌，不是 GitHub 密码或令牌名称';
   $('#settings-error').textContent = '';
   $('#settings').showModal();
 }
@@ -193,13 +195,17 @@ $('#settings-close').onclick = () => { $('#github-token').value = ''; $('#settin
 $('#settings').addEventListener('cancel', () => { $('#github-token').value = ''; });
 $('#settings-form').onsubmit = async e => {
   e.preventDefault();
+  const button = $('#settings-submit');
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = '正在解锁并读取清单…';
+  $('#settings-error').textContent = '';
   try {
     const next = normalizeConfig(Object.fromEntries(['owner', 'repo', 'branch', 'path'].map(k => [k, $(`#github-${k}`).value])));
     const switching = !config || configKey(next) !== configKey(config);
     if (config && switching && dirty()) throw Error('当前清单还有未同步修改，请先同步或下载备份。');
     const localDraft = !config ? clone(state) : null;
-    const newToken = $('#github-token').value.trim();
-    token = newToken || (switching ? '' : token);
+    token = connectionToken($('#github-token').value, token, switching);
     authorized = false;
     config = next;
     try {
@@ -213,9 +219,16 @@ $('#settings-form').onsubmit = async e => {
         state = localDraft; cache(); render();
       }
     }
-    $('#settings').close();
-    await sync();
-  } catch (error) { $('#settings-error').textContent = error.message; }
+    const connected = await sync();
+    if (connected || pendingConflict) $('#settings').close();
+    else $('#settings-error').textContent = $('#local-status').textContent;
+  } catch (error) {
+    $('#settings-error').textContent = error.message;
+    $('#github-token').focus();
+  } finally {
+    button.disabled = false;
+    button.textContent = '解锁并加载清单';
+  }
 };
 $('#disconnect').onclick = async () => {
   if (dirty() && !confirm('本机还有未同步修改。请确认已下载备份；退出连接会清除本机缓存，是否继续？')) return;
@@ -228,7 +241,7 @@ $('#disconnect').onclick = async () => {
   await loadState();
   status('已退出连接', '凭证与该连接的本机缓存已清除。云端清单保持不变。');
 };
-$('#sync-now').onclick = () => sync();
+$('#sync-now').onclick = () => token ? sync() : openSettings();
 $('#initialize-cloud').onclick = async () => {
   if (!confirm('将在所选 GitHub 仓库创建 checklist JSON 文件。公开仓库中的清单会公开，是否继续？')) return;
   $('#initialize-cloud').hidden = true;

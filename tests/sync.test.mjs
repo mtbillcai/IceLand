@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { mergeItems, sameItems, validItems, parseDocument, normalizeConfig, encodeContent, decodeContent, GitHubStore } from '../docs/sync.mjs';
+import { mergeItems, sameItems, validItems, parseDocument, normalizeConfig, connectionToken, encodeContent, decodeContent, GitHubStore } from '../docs/sync.mjs';
 const item = (id = 'a', extra = {}) => ({ id, name: '保温杯', category: '零食与饮水', quantity: '1 个', note: '500ml', plan: '携带', packed: false, ...extra });
 const cfg = { owner: 'mtbillcai', repo: 'IceLand', branch: 'data', path: 'checklist.json' };
 const doc = items => ({ id: 'iceland-test', updatedAt: 1, items });
+test('未填写令牌不能假装完成连接，切换仓库不会复用旧凭证', () => {
+  assert.throws(() => connectionToken(''), /Generate token/);
+  assert.throws(() => connectionToken('   '), /仅登录 GitHub/);
+  assert.throws(() => connectionToken('', 'existing-test-token', true), /访问令牌/);
+  assert.equal(connectionToken('', 'existing-test-token'), 'existing-test-token');
+  assert.equal(connectionToken(' new-test-token ', 'old-test-token', true), 'new-test-token');
+});
 const sourcePath = fs.readdirSync('.').find(name => name.endsWith('_副本.html'));
 test('原始 HTML 数据完整迁移', { skip: !sourcePath || !fs.existsSync('private-data/checklist.json') }, () => {
   const html = fs.readFileSync(sourcePath, 'utf8');
