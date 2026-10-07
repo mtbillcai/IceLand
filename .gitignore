@@ -1,0 +1,6 @@
+private-data/
+checklist.json
+*副本.html
+node_modules/
+.env*
+test-output/
