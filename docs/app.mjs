@@ -1,5 +1,5 @@
 import { createView } from './view.mjs';
-import { GitHubStore, clone, validItems, parseDocument, normalizeConfig, configKey, connectionToken, sameItems, mergeItems } from './sync.mjs';
+import { GitHubStore, clone, validItems, parseDocument, normalizeConfig, configKey, connectionToken, sameItems, mergeItems } from './sync.mjs?v=20261007-fetch-fix';
 
 const $ = selector => document.querySelector(selector);
 const ROOT = 'iceland-github-v1:';
