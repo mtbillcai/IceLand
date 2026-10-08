@@ -1,11 +1,12 @@
-import { createView } from './view.mjs';
+import { createView } from './view.mjs?v=20261008-bulk';
+import { applyBulkAction } from './checklist.mjs?v=20261008-bulk';
 import { GitHubStore, clone, validItems, parseDocument, normalizeConfig, configKey, connectionToken, sameItems, mergeItems } from './sync.mjs?v=20261007-fetch-fix';
 
 const $ = selector => document.querySelector(selector);
 const ROOT = 'iceland-github-v1:';
 let config = null, token = '', state, storageKey, storageOK = true, corrupt = false, authorized = false;
 let working = false, timer, pendingConflict = null, lastCheck = 0, preview = false;
-let canOwnCache = false, releaseLock;
+let canOwnCache = false, releaseLock, pendingBulk = null, loadedFromCache = false;
 const view = createView(commit);
 const blank = () => ({ id: crypto.randomUUID(), updatedAt: 0, items: [], base: null, sha: null });
 const dirty = () => state && !sameItems(state.items, state.base || []);
@@ -21,15 +22,17 @@ function status(title, message, warning = false) {
 }
 function controls() {
   document.body.classList.toggle('locked', Boolean(config && !authorized));
-  const disabled = !writable() || working || Boolean(pendingConflict);
+  const disabled = !writable() || working || Boolean(pendingConflict) || Boolean(pendingBulk);
   $('#add').disabled = disabled;
   $('#import-open').disabled = disabled;
+  $('#uncheck-all').disabled = disabled || !state.items.some(item => item.packed);
+  $('#clear-all').disabled = disabled || !state.items.length;
   document.querySelectorAll('[data-check],[data-edit],[data-delete]').forEach(e => {
     e.disabled = disabled || (e.matches('[data-check]') && state.items.find(x => x.id === e.dataset.check)?.plan === '不带');
   });
-  $('#sync-now').disabled = working || corrupt || Boolean(pendingConflict);
+  $('#sync-now').disabled = working || corrupt || Boolean(pendingConflict) || Boolean(pendingBulk);
   $('#sync-now').textContent = working ? '同步中…' : pendingConflict ? '有待解决的冲突' : '立即同步';
-  $('#settings-open').disabled = working || Boolean(pendingConflict);
+  $('#settings-open').disabled = working || Boolean(pendingConflict) || Boolean(pendingBulk);
   $('#welcome').hidden = Boolean(state.items.length);
 }
 function render() { view.setItems(config && !authorized ? [] : state.items); controls(); }
@@ -54,7 +57,7 @@ async function ownCache() {
 }
 async function loadState() {
   storageKey = storedKey();
-  corrupt = false; state = blank();
+  corrupt = false; loadedFromCache = false; state = blank();
   await ownCache();
   try {
     const text = localStorage.getItem(storageKey);
@@ -63,6 +66,7 @@ async function loadState() {
       parseDocument(text);
       if (value.base !== null && !validItems(value.base)) throw Error('invalid baseline');
       state = value;
+      loadedFromCache = true;
     }
   } catch {
     corrupt = true;
@@ -71,7 +75,7 @@ async function loadState() {
   render();
 }
 async function commit(next) {
-  if (!writable() || working || pendingConflict) { render(); return false; }
+  if (!writable() || working || pendingConflict || pendingBulk) { render(); return false; }
   state.items = clone(next);
   state.updatedAt = Date.now();
   cache(); render();
@@ -82,6 +86,48 @@ async function commit(next) {
   if (config) timer = setTimeout(() => sync(), 1500);
   return true;
 }
+function openBulkConfirmation(action) {
+  if (!writable() || working || pendingConflict || pendingBulk) return;
+  const count = action === 'clear' ? state.items.length : state.items.filter(item => item.packed).length;
+  if (!count) return;
+  pendingBulk = { action, items: clone(state.items) };
+  $('#bulk-title').textContent = action === 'clear' ? '清空所有数据？' : '取消勾选所有物品？';
+  $('#bulk-message').textContent = action === 'clear'
+    ? `将删除清单中的全部 ${count} 项物品，包括名称、数量、备注和准备状态。此操作不能直接撤销，建议先下载备份。GitHub 连接设置会保留。`
+    : `将取消整份清单中 ${count} 项物品的勾选，保留物品、数量和备注。此操作也包括当前筛选中未显示的物品。`;
+  $('#bulk-sync-note').textContent = config ? '确认后会自动同步到 GitHub，其他电脑也会收到这些修改。' : '确认后会保存到当前浏览器。';
+  $('#bulk-submit').textContent = action === 'clear' ? '确认清空全部物品' : '确认取消全部勾选';
+  $('#bulk-submit').classList.toggle('danger', action === 'clear');
+  controls();
+  $('#bulk-confirm').showModal();
+  $('#bulk-cancel').focus();
+}
+function cancelBulkConfirmation() {
+  pendingBulk = null;
+  $('#bulk-confirm').close();
+  controls();
+  if (config && dirty()) { clearTimeout(timer); timer = setTimeout(() => sync(), 1500); }
+}
+$('#uncheck-all').onclick = () => openBulkConfirmation('uncheck');
+$('#clear-all').onclick = () => openBulkConfirmation('clear');
+$('#bulk-cancel').onclick = $('#bulk-close').onclick = cancelBulkConfirmation;
+$('#bulk-confirm').addEventListener('cancel', e => { e.preventDefault(); cancelBulkConfirmation(); });
+$('#bulk-form').onsubmit = async e => {
+  e.preventDefault();
+  const pending = pendingBulk;
+  if (!pending) return;
+  if (!writable() || working || pendingConflict || !sameItems(state.items, pending.items)) {
+    cancelBulkConfirmation();
+    view.toast('清单状态已变化，请检查后重新操作。');
+    return;
+  }
+  pendingBulk = null;
+  $('#bulk-confirm').close();
+  if (await commit(applyBulkAction(state.items, pending.action))) {
+    view.resetAfterBulk(pending.action === 'clear');
+    view.toast(pending.action === 'clear' ? '已清空全部物品。' : '已取消所有物品的勾选。');
+  }
+};
 function showConflicts(result, remote) {
   pendingConflict = { result, remote };
   $('#conflict-list').replaceChildren();
@@ -107,6 +153,7 @@ function showConflicts(result, remote) {
   controls();
 }
 async function sync({ initialize = false } = {}) {
+  if (pendingBulk) return;
   if (!config) { openSettings(); return; }
   if (!token) { status('私人清单 · 尚未解锁', '点击「GitHub 同步设置」，输入仅能访问私有数据仓库的令牌。'); controls(); return; }
   if (working || corrupt || pendingConflict) return;
@@ -307,7 +354,7 @@ async function start() {
   if (corrupt) return;
   if (!canOwnCache) { status('此标签页只读', '另一标签页正在管理这份清单。请关闭另一页后刷新。'); return; }
   preview = ['localhost', '127.0.0.1'].includes(location.hostname) && defaults.localPreview;
-  if (preview && !state.items.length && state.base === null) {
+  if (preview && !loadedFromCache && !state.items.length && state.base === null) {
     try {
       const response = await fetch('./__local/checklist.json');
       const source = parseDocument(await response.text());
